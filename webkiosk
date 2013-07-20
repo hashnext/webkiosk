@@ -1,0 +1,210 @@
+#!/usr/bin/env python
+
+# Copyright (c) 2013, Stuart Clark
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+import sys
+import os
+import signal
+import logging
+import logging.handlers
+import argparse
+from ConfigParser import RawConfigParser
+from PyQt4.QtCore import QUrl
+from PyQt4.QtGui import QApplication
+from PyQt4.QtWebKit import QWebView
+
+def set_defaults(config):
+	# Add [interface] & [logging] sections if needed
+	if not config.has_section('interface'):
+		config.add_section('interface')
+	if not config.has_section('logging'):
+		config.add_section('logging')
+
+	# Add defaults to [interface] section if needed
+	if not config.has_option('interface', 'fullscreen'):
+		config.set('interface', 'fullscreen', 'True')
+	if not config.has_option('interface', 'url'):
+		config.set('interface', 'url', '')
+
+	# Add defaults to [logging] section if needed
+	if not config.has_option('logging', 'method'):
+		config.set('logging', 'method', 'syslog')
+	if not config.has_option('logging', 'level'):
+		config.set('logging', 'level', 'INFO')
+	if not config.has_option('logging', 'facility'):
+		config.set('logging', 'facility', 'DAEMON')
+	if not config.has_option('logging', 'filename'):
+		config.set('logging', 'filename', '/dev/log')
+	if not config.has_option('logging', 'format'):
+		config.set('logging', 'format',
+			'%(filename)s[%(process)d]: %(message)s')
+
+	return
+
+def load_configs(config, system, systemdir, user):
+	# Create list of files to parse
+	file_list = []
+
+	if not system == "":
+		file_list.append(system)
+
+	if not systemdir == "":
+		# Find all config files within directory
+		for relpath, dirs, files in os.walk(systemdir):
+			for file in files:
+				if file.endswith('.conf'):
+					file_list.append(os.path.join(systemdir, relpath, file))
+
+	if not user == "":
+		file_list.append(user)
+
+	# Parse config files
+	config.read(file_list)
+
+	return
+
+def command_line_parse(config):
+	parser = argparse.ArgumentParser(description='Web based kiosk')
+
+	parser.add_argument('-u', '--url', dest='url', action='store',
+		help='Initial URL')
+	parser.add_argument('-f', '--fullscreen', dest='fullscreen',
+		action='store_true', help='Show fullscreen')
+	parser.add_argument('-F', '--no-fullscreen', dest='no_fullscreen',
+		action='store_true', help='Do not show fullscreen')
+	parser.add_argument('--stderr', dest='stderr', action='store_true',
+		help='Log to stderr')
+	parser.add_argument('-d', '--debug', dest='debug', action='store_true',
+		help='Set debug logging')
+
+	args = parser.parse_args()
+
+	if not args.url == None and not args.url == '':
+		config.set('interface', 'url', args.url)
+	if args.fullscreen:
+		config.set('interface', 'fullscreen', True)
+	if args.no_fullscreen:
+		config.set('interface', 'fullscreen', False)
+	if args.stderr:
+		config.set('logging', 'method', 'stderr')
+	if args.debug:
+		config.set('logging', 'level', 'DEBUG')
+
+	return
+
+def setup_logging(config):
+	# Logging settings
+	method   = config.get('logging', 'method').lower()
+	level    = config.get('logging', 'level').upper()
+	facility = config.get('logging', 'facility').lower()
+	filename = config.get('logging', 'filename')
+	format   = config.get('logging', 'format')
+
+	# Get logging object
+	logger = logging.getLogger()
+
+	# Set logging level
+	logger.setLevel(level)
+
+	# Set logging handler
+	if method == 'syslog':
+		if not filename.startswith('/'):
+			(host, port, rest) = (filename + ':514').split(':', 3)
+			filename = (host, port)
+
+		handler = logging.handlers.SysLogHandler(address=filename,
+			facility=facility)
+	elif method == 'file':
+		handler = logging.handlers.WatchedFileHandler(filename)
+	elif method == 'stdout':
+		handler = logging.StreamHandler(stream=sys.stdout)
+	elif method == 'stderr':
+		handler = logging.StreamHandler()
+	else:
+		raise SystemExit('Unknown logging method: %s' % method)
+
+	# Set logging format
+	handler.setFormatter(logging.Formatter(fmt=format))
+	logger.addHandler(handler)
+
+	return logger
+
+if __name__ == "__main__":
+	# Config parser
+	config = RawConfigParser()
+
+	# Set up defaults
+	set_defaults(config)
+
+	# Read conf files
+	load_configs(config, '/etc/webkiosk.conf', '/etc/webkiosk.d/',
+		os.path.expanduser('~/.webkiosk.conf'))
+
+	# Read command line
+	command_line_parse(config)
+
+	# Set up logging
+	logger = setup_logging(config)
+
+	# All now ready to start up
+	logger.info('Starting up webkiosk')
+
+	# Lookup interface details
+	fullscreen = config.getboolean('interface', 'fullscreen')
+	url        = config.get('interface', 'url')
+
+	logger.debug('fullscreen: %s', fullscreen)
+	logger.debug('url: %s', url)
+
+	# url must be set
+	if url == None or url == '':
+		logger.critical('No URL specified')
+		raise SystemExit('No URL specified')
+
+	# Add signal handler to allow Ctrl+C on terminal to quit
+	signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+	# Initialise Qt application
+	logger.debug('Initialise Qt application')
+	app = QApplication(sys.argv)
+
+	# Create WebView
+	logger.debug('Create WebView')
+	web = QWebView()
+
+	# Load initial URL
+	logger.debug('Load initial URL')
+	web.load(QUrl(url))
+
+	# Show widget
+	logger.debug('Show widget')
+	if fullscreen:
+		web.showFullScreen()
+	else:
+		web.show()
+
+	# Start event loop
+	logger.debug('Start event loop')
+	sys.exit(app.exec_())
+
+	# Clean up & Exit
+	logger.info('Exiting webkiosk')
+	logger.shutdown()

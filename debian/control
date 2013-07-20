@@ -1,0 +1,22 @@
+### Commented entries have reasonable defaults.
+### Uncomment to edit them.
+Source: webkiosk
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+
+Package: webkiosk
+Version: 0.1
+Maintainer: Stuart Clark <stuart.clark@Jahingo.com>
+Depends: python, python-qt4
+Provides: kiosk
+Architecture: all
+Copyright: COPYING
+#Changelog: CHANGES
+Readme: README.md
+Postinst: debian/postinst.sh
+Prerm: debian/prerm.sh
+Files: webkiosk /usr/bin
+ webkiosk.conf /etc
+Description: WebKit based kiosk application
+ Display a fullscreen web page
